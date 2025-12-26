@@ -131,6 +131,10 @@
         .mirror {
             transform: scaleX(-1);
         }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 
@@ -270,6 +274,50 @@
         let blendshapeNames = []; // ヘッダー（categoryName一覧）
         let frameRows = [];       // { t: "0.033", values: number[] | null } の配列
 
+        // 変更点２
+        function pickBestRecorderMimeType() {
+            if (!("MediaRecorder" in window) || typeof MediaRecorder.isTypeSupported !== "function") {
+                return ""; // 未対応 or 判定不可 → 指定なしで作る
+            }
+
+            // mp4優先（できるだけ緩い→厳しい順）
+            const mp4Candidates = [
+                "video/mp4",
+                "video/mp4;codecs=avc1,mp4a.40.2",
+                "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+                "video/mp4;codecs=h264,aac",
+            ];
+
+            for (const t of mp4Candidates) {
+                try {
+                    if (MediaRecorder.isTypeSupported(t)) return t;
+                } catch { }
+            }
+
+            // mp4が無理なら webm（Chrome/Android/Windowsで強い）
+            const webmCandidates = [
+                "video/webm",
+                "video/webm;codecs=vp9,opus",
+                "video/webm;codecs=vp8,opus",
+                "video/webm;codecs=vp8",
+            ];
+
+            for (const t of webmCandidates) {
+                try {
+                    if (MediaRecorder.isTypeSupported(t)) return t;
+                } catch { }
+            }
+
+            return ""; // どれもダメなら指定なし
+        }
+
+        function extFromMime(mime) {
+            const m = (mime || "").toLowerCase();
+            if (m.includes("video/mp4")) return "mp4";
+            if (m.includes("video/webm")) return "webm";
+            return "webm"; // 不明時は従来どおりwebm扱い（運用に合わせて変更可）
+        }
+        //変更点２ここまで
 
         function setStatus(msg) {
             statusEl.textContent = msg;
@@ -290,10 +338,12 @@
             const base = makeBaseName();
             if (!base) return null;
             return {
-                video: `${base}.webm`,
+                base,              // ★追加：拡張子なし
+                video: `${base}.webm`, // ※互換のため残してもOK（使わない）
                 csv: `${base}.csv`,
             };
         }
+
 
         function revokeIfAny(url) {
             if (url) URL.revokeObjectURL(url);
@@ -350,14 +400,32 @@
             });
         }
 
+        async function waitForVideoFrame(video, timeoutMs = 250) {
+            // requestVideoFrameCallback が使えるなら「実フレーム更新」を待つ
+            if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+                await Promise.race([
+                    new Promise((resolve) => video.requestVideoFrameCallback(() => resolve())),
+                    sleep(timeoutMs), // タイムアウト（来ない端末でも止まらない）
+                ]);
+            } else {
+                // フォールバック：1フレーム相当待つ（Androidでも効くことが多い）
+                await sleep(33);
+            }
+        }
+
         async function seekTo(timeSec) {
             playback.currentTime = timeSec;
             await once(playback, "seeked");
-            await sleep(0);
+
+            // 「seeked」= 時刻が動いただけ。ここで実フレーム更新を待つ
+            await waitForVideoFrame(playback, 250);
+
+            // 念のためデコード状態もチェック
             if (playback.readyState < 2) {
-                await once(playback, "loadeddata");
+                await Promise.race([once(playback, "loadeddata"), sleep(250)]);
             }
         }
+
 
         function showOverlay(on) {
             overlay.style.display = on ? "flex" : "none";
@@ -571,7 +639,17 @@
             chunks = [];
 
             try {
-                recorder = new MediaRecorder(stream);
+                const preferredMime = pickBestRecorderMimeType();
+
+                try {
+                    recorder = preferredMime
+                        ? new MediaRecorder(stream, { mimeType: preferredMime })
+                        : new MediaRecorder(stream);
+                } catch (e) {
+                    // mimeType指定が原因で落ちる環境もあるので、最後の砦
+                    recorder = new MediaRecorder(stream);
+                }
+
             } catch (e) {
                 setStatus("MediaRecorderが使えない/初期化できない: " + e.message);
                 btnRec.disabled = false;
@@ -597,6 +675,11 @@
                     `解析準備中...`
                 );
 
+                const actualMime = blob.type || recorder.mimeType || "";
+                const videoExt = extFromMime(actualMime);
+                const videoFileName = `${names.base}.${videoExt}`;  // ★ここが本命
+
+
                 // Blobを再生用videoへ
                 const url = URL.createObjectURL(blob);
                 playback.src = url;
@@ -606,6 +689,10 @@
                     if (playback.readyState >= 1) return res();
                     playback.onloadedmetadata = () => res();
                 });
+
+                //blob再生画面を一旦隠す（解析安定性のため）
+                playback.classList.add("hidden");
+
 
                 // 解析（CSV生成）
                 try {
@@ -625,13 +712,13 @@
 
 
                 // 再ダウンロードリンクを作成（永続化はしない：メモリ上）
-                lastVideoBlobUrl = setDownloadLink(videoLink, blob, names.video);
+                lastVideoBlobUrl = setDownloadLink(videoLink, blob, videoFileName);
                 lastCsvBlobUrl = setDownloadLink(csvLink, csvBlob, names.csv);
 
                 // 自動保存（動画＋CSV）
                 // ※ iOS Safariの制約で、環境によっては自動DLが「ダウンロード一覧」止まりになります
                 try {
-                    autoDownload(blob, names.video);
+                    autoDownload(blob, videoFileName);
                 } catch (e) {
                     console.warn("auto video download failed", e);
                 }
@@ -644,10 +731,15 @@
 
                 setStatus(
                     `完了\n` +
-                    `動画: ${names.video}\n` +
+                    `動画: ${videoFileName}\n` +
                     `CSV: ${names.csv}\n` +
+                    `mime: ${actualMime || "(unknown)"}\n` +
                     `（再ダウンロードリンクも作成済み）`
                 );
+
+                //録画blobビュー再表示
+                playback.classList.remove("hidden");
+
 
                 btnRec.disabled = false;
                 btnCam.disabled = false;
