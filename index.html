@@ -15,7 +15,7 @@
   </style>
 </head>
 <body>
-  <h2>0952_3秒録画 → 各フレームでFace Blendshapes表示（MediaPipe）</h2>
+  <h2>1033_3秒録画 → 各フレームでFace Blendshapes表示（MediaPipe）</h2>
 
   <div class="row">
     <button id="btnCam">カメラ起動（インカメ）</button>
@@ -45,7 +45,7 @@
   <h3>Blendshapes（各フレーム）</h3>
   <pre id="out">未解析</pre>
 
-  <script type="module">
+<script type="module">
   import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
 
   const btnCam = document.getElementById("btnCam");
@@ -61,11 +61,13 @@
   let chunks = [];
   let faceLandmarker = null;
 
-  // 追加：全フレーム分ログを保持
+  // ログ
   let logs = [];
   let frameIndex = 0;
 
-  // MediaPipe FaceLandmarker 初期化
+  // 解析で使うfps（カメラから推定して保持）
+  let captureFps = 30;
+
   async function initMediapipe() {
     if (faceLandmarker) return faceLandmarker;
 
@@ -77,17 +79,146 @@
       baseOptions: {
         modelAssetPath:
           "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU"
+        delegate: "GPU",
       },
       runningMode: "VIDEO",
       outputFaceBlendshapes: true,
-      numFaces: 1
+      numFaces: 1,
     });
 
     return faceLandmarker;
   }
 
-  // インカメ起動
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  function once(el, name) {
+    return new Promise((resolve, reject) => {
+      const onOk = () => {
+        cleanup();
+        resolve();
+      };
+      const onErr = (e) => {
+        cleanup();
+        reject(e);
+      };
+      const cleanup = () => {
+        el.removeEventListener(name, onOk);
+        el.removeEventListener("error", onErr);
+      };
+      el.addEventListener(name, onOk, { once: true });
+      el.addEventListener("error", onErr, { once: true });
+    });
+  }
+
+  async function seekTo(timeSec) {
+    // iOS Safariはシーク直後のデコードが間に合わないことがあるので
+    // seekedを待って、さらに短い待ちを入れて安定させる
+    playback.currentTime = timeSec;
+    await once(playback, "seeked");
+    // これが効くケースが多い（必要なら増やす）
+    await sleep(0);
+    // さらに確実に「データがある状態」を待つ（環境差あり）
+    if (playback.readyState < 2) {
+      await once(playback, "loadeddata");
+    }
+  }
+
+  function formatTopBlendshapes(face, topN = 12, threshold = 0) {
+    const cats = [...face.categories]
+      .filter((c) => c.score > threshold)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topN);
+
+    if (cats.length === 0) return "  (all ~0)\n";
+    return cats.map((c) => `  ${c.categoryName}: ${c.score.toFixed(3)}`).join("\n") + "\n";
+  }
+
+  async function processOneFrameAtTime(landmarker, timeSec, timestampMsForMP) {
+    // video → canvas
+    const vw = playback.videoWidth || 320;
+    const vh = playback.videoHeight || 240;
+    canvas.width = 320;
+    canvas.height = Math.round(320 * (vh / vw));
+    ctx.drawImage(playback, 0, 0, canvas.width, canvas.height);
+
+    // 推論（VIDEOモード）
+    const result = landmarker.detectForVideo(playback, timestampMsForMP);
+
+    let text = `frame=${frameIndex}, t=${timeSec.toFixed(3)}s\n`;
+    const face = result.faceBlendshapes?.[0];
+    if (!face) {
+      text += "  顔検出なし\n";
+    } else {
+      text += formatTopBlendshapes(face, 12, 0); // 0以上はtop12（必要ならthreshold上げてOK）
+    }
+
+    logs.push(text);
+    frameIndex++;
+  }
+
+  // ✅「全フレーム必ず欲しい」寄り：再生追従ではなく、pause + seek で固定ステップ解析
+  // 注意：動画コンテナ/デコードの都合で、シークは必ずしも“厳密に全フレーム”へ一致しませんが、
+  // requestVideoFrameCallback方式より「欠落しにくい」安定したオフライン処理になります。
+  async function analyzeVideoFramesBySeeking() {
+    const landmarker = await initMediapipe();
+
+    // 再生は使わない（pause前提）
+    playback.pause();
+
+    // duration を確定
+    if (!isFinite(playback.duration) || playback.duration <= 0) {
+      throw new Error("動画durationが取得できませんでした。");
+    }
+
+    const fps = Math.max(1, Math.round(captureFps || 30));
+    const step = 1 / fps;
+
+    // 端数の誤差で最後がはみ出るのを避ける
+    const duration = playback.duration;
+    const totalFrames = Math.max(1, Math.floor(duration * fps));
+
+    out.textContent =
+      `解析方法: pause+seek\n` +
+      `推定fps: ${fps}\n` +
+      `duration: ${duration.toFixed(3)}s\n` +
+      `target frames: ${totalFrames}\n\n` +
+      `解析中...\n`;
+
+    logs = [];
+    frameIndex = 0;
+
+    // MediaPipeのVIDEOはtimestampが単調増加だと安定しやすいので、
+    // ここでは「フレーム番号に対応する理想時刻」をtimestampとして渡す
+    for (let i = 0; i < totalFrames; i++) {
+      const t = i * step;
+
+      // 念のため範囲内
+      const tClamped = Math.min(Math.max(0, t), Math.max(0, duration - 0.0001));
+
+      await seekTo(tClamped);
+
+      // timestampMsは単調増加の値を渡す（ここでは理想時刻）
+      await processOneFrameAtTime(landmarker, tClamped, t * 1000);
+
+      // UI更新は間引く（重くすると逆に不安定になるため）
+      if (i % 10 === 0) {
+        out.textContent =
+          `解析方法: pause+seek\n` +
+          `fps: ${fps}\n` +
+          `frame ${i + 1}/${totalFrames}\n\n` +
+          logs.slice(Math.max(0, logs.length - 40)).join("\n"); // 最後の40件だけ表示（軽量化）
+      }
+    }
+
+    // 最後に全件表示（大量だと重いので、必要なら最後だけにしてもOK）
+    out.textContent =
+      `解析完了: ${totalFrames} frames\n` +
+      `fps: ${fps}, duration: ${duration.toFixed(3)}s\n\n` +
+      logs.join("\n");
+  }
+
   btnCam.addEventListener("click", async () => {
     out.textContent = "カメラ起動中...";
     try {
@@ -95,23 +226,37 @@
         video: {
           facingMode: "user",
           width: { ideal: 1280 },
-          height: { ideal: 720 }
+          height: { ideal: 720 },
+          // ここで理想fpsを一応指定（必ずしも固定されません）
+          frameRate: { ideal: 30, max: 30 },
         },
-        audio: false
+        audio: false,
       });
-      preview.srcObject = stream;
 
+      // 実際のfpsを取得して保持（取れない環境もあるのでフォールバック）
+      try {
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings?.() || {};
+        if (typeof settings.frameRate === "number" && settings.frameRate > 0) {
+          captureFps = settings.frameRate;
+        } else {
+          captureFps = 30;
+        }
+      } catch {
+        captureFps = 30;
+      }
+
+      preview.srcObject = stream;
       await initMediapipe();
 
       btnRec.disabled = false;
-      out.textContent = "カメラ起動OK。次に「撮影開始（3秒）」を押してください。";
+      out.textContent = `カメラ起動OK（推定fps=${Math.round(captureFps)}）。次に「撮影開始（3秒）」を押してください。`;
     } catch (e) {
       console.error(e);
       out.textContent = "カメラ起動に失敗: " + e.message;
     }
   });
 
-  // 3秒録画
   btnRec.addEventListener("click", async () => {
     if (!stream) return;
 
@@ -132,12 +277,8 @@
     recorder.onstop = async () => {
       const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
 
-      // 追加：解析ログ初期化
-      logs = [];
-      frameIndex = 0;
-      out.textContent = `録画完了。Blobサイズ: ${blob.size.toLocaleString()} bytes\n解析中...\n`;
+      out.textContent = `録画完了。Blobサイズ: ${blob.size.toLocaleString()} bytes\n解析準備中...`;
 
-      // 録画Blobを再生用videoへ
       const url = URL.createObjectURL(blob);
       playback.src = url;
       playback.currentTime = 0;
@@ -148,89 +289,23 @@
         playback.onloadedmetadata = () => res();
       });
 
-      // 解析開始（フレームごと）
-      await analyzeVideoFrames();
-
-      out.textContent += "\n\n解析完了。";
+      // 解析（pause+seek方式）
+      try {
+        await analyzeVideoFramesBySeeking();
+      } catch (e) {
+        console.error(e);
+        out.textContent = "解析に失敗: " + e.message;
+      }
     };
 
     recorder.start();
 
-    // 3秒で停止
     setTimeout(() => {
       if (recorder && recorder.state !== "inactive") recorder.stop();
     }, 3000);
   });
-
-  // フレームごとにblendshapes推論して表示
-  async function analyzeVideoFrames() {
-    const landmarker = await initMediapipe();
-
-    // 再生開始
-    await playback.play();
-
-    // iOS Safari: requestVideoFrameCallback が使えればそれを優先
-    if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-      await new Promise((resolve) => {
-        const step = async (now, metadata) => {
-          if (playback.ended || playback.paused) {
-            resolve();
-            return;
-          }
-          await processOneFrame(landmarker, metadata.mediaTime * 1000);
-          playback.requestVideoFrameCallback(step);
-        };
-        playback.requestVideoFrameCallback(step);
-      });
-    } else {
-      // フォールバック: タイマーで疑似的にフレーム処理
-      await new Promise((resolve) => {
-        const timer = setInterval(async () => {
-          if (playback.ended || playback.paused) {
-            clearInterval(timer);
-            resolve();
-            return;
-          }
-          await processOneFrame(landmarker, playback.currentTime * 1000);
-        }, 1000 / 30);
-      });
-    }
-  }
-
-  // 変更：毎フレームの結果を「上書き」ではなく「蓄積して全表示」
-  async function processOneFrame(landmarker, timestampMs) {
-    // video → canvas
-    const vw = playback.videoWidth || 320;
-    const vh = playback.videoHeight || 240;
-    canvas.width = 320;
-    canvas.height = Math.round(320 * (vh / vw));
-    ctx.drawImage(playback, 0, 0, canvas.width, canvas.height);
-
-    // 推論（VIDEOモード）
-    const result = landmarker.detectForVideo(playback, timestampMs);
-
-    let text = `frame=${frameIndex}, t=${(timestampMs / 1000).toFixed(3)}s\n`;
-
-    const face = result.faceBlendshapes?.[0];
-    if (!face) {
-      text += "  顔検出なし\n";
-    } else {
-      const top = [...face.categories]
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 12);
-
-      for (const c of top) {
-        text += `  ${c.categoryName}: ${c.score.toFixed(3)}\n`;
-      }
-    }
-
-    logs.push(text);
-    frameIndex++;
-
-    // 全ログを画面に出す（シンプル版：毎フレーム更新）
-    out.textContent = logs.join("\n");
-  }
 </script>
+
 
 </body>
 </html>
