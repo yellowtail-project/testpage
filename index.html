@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>1033_録画 → 自動保存（動画.webm / 解析.csv）</h2>
+    <h2>2054_録画 → 自動保存（動画.webm / 解析.csv）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -363,11 +363,13 @@
                 "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm"
             );
 
+            const isAndroid = /Android/i.test(navigator.userAgent);
+
             faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
                 baseOptions: {
                     modelAssetPath:
                         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                    delegate: "GPU",
+                    delegate: isAndroid ? "CPU" : "GPU",
                 },
                 runningMode: "VIDEO",
                 outputFaceBlendshapes: true,
@@ -400,14 +402,32 @@
             });
         }
 
+        async function waitForVideoFrame(video, timeoutMs = 250) {
+            // requestVideoFrameCallback が使えるなら「実フレーム更新」を待つ
+            if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+                await Promise.race([
+                    new Promise((resolve) => video.requestVideoFrameCallback(() => resolve())),
+                    sleep(timeoutMs), // タイムアウト（来ない端末でも止まらない）
+                ]);
+            } else {
+                // フォールバック：1フレーム相当待つ（Androidでも効くことが多い）
+                await sleep(33);
+            }
+        }
+
         async function seekTo(timeSec) {
             playback.currentTime = timeSec;
             await once(playback, "seeked");
-            await sleep(0);
+
+            // 「seeked」= 時刻が動いただけ。ここで実フレーム更新を待つ
+            await waitForVideoFrame(playback, 250);
+
+            // 念のためデコード状態もチェック
             if (playback.readyState < 2) {
-                await once(playback, "loadeddata");
+                await Promise.race([once(playback, "loadeddata"), sleep(250)]);
             }
         }
+
 
         function showOverlay(on) {
             overlay.style.display = on ? "flex" : "none";
