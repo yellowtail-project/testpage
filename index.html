@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>1033_録画 → 自動保存（動画.webm / 解析.csv）</h2>
+    <h2>1647_録画 → 自動保存（動画.webm / 解析.csv）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -401,13 +401,29 @@
         }
 
         async function seekTo(timeSec) {
+            // 目標位置へシーク
             playback.currentTime = timeSec;
             await once(playback, "seeked");
-            await sleep(0);
+
+            // ✅ ここがポイント：
+            // seeked は「時刻が変わった」だけで「新フレームが描ける」保証がない。
+            // requestVideoFrameCallback があれば「実際にフレームが更新された」のを1回待つ。
+            if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+                await new Promise((resolve) => {
+                    playback.requestVideoFrameCallback(() => resolve());
+                });
+            } else {
+                // フォールバック：1フレーム分待つ（Androidではこれでも改善することが多い）
+                await sleep(33);
+            }
+
+            // 追加の保険：デコードが間に合っていない端末向け
+            // readyState 2 = HAVE_CURRENT_DATA
             if (playback.readyState < 2) {
                 await once(playback, "loadeddata");
             }
         }
+
 
         function showOverlay(on) {
             overlay.style.display = on ? "flex" : "none";
@@ -503,8 +519,13 @@
                 const face = result.faceBlendshapes?.[0];
 
                 if (!face) {
-                    // 顔なし：ヘッダー確定後なら空欄行、未確定なら一旦空で入れる
-                    frameRows.push({ t: tClamped.toFixed(3), values: null });
+                    if (blendshapeNames.length === 0) {
+                        // まだヘッダー未確定（最初の方で顔が取れない）→ nullで保持
+                        frameRows.push({ t: tClamped.toFixed(3), values: null });
+                    } else {
+                        // ヘッダー確定済みなら、列数分の空欄を入れて「そのフレームは検出失敗」と分かるようにする
+                        frameRows.push({ t: tClamped.toFixed(3), values: new Array(blendshapeNames.length).fill("") });
+                    }
                 } else {
                     // 初回にヘッダー（blendshape名）を確定
                     if (blendshapeNames.length === 0) {
@@ -515,8 +536,9 @@
                     const map = new Map(face.categories.map((c) => [c.categoryName, c.score]));
                     const values = blendshapeNames.map((name) => {
                         const v = map.get(name);
-                        // 6桁固定（数値としてCSVに入る）
-                        return (typeof v === "number") ? Number(v).toFixed(6) : "";
+                        if (typeof v !== "number" || !Number.isFinite(v)) return "";
+                        return v.toFixed(6);
+
                     });
 
                     frameRows.push({ t: tClamped.toFixed(3), values });
