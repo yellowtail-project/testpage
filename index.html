@@ -297,9 +297,8 @@
     <div class="badge">録画中</div>
   </div>
 
-  <script>
+<script>
     // 固定の録画中オーバーレイ画像URL（ユーザーは変更不可）
-    // ★ 元ファイルのURLをそのまま維持
     const ALT_IMAGE_URL = "https://yellowtail-project.github.io/testpage/test_background3.png";
 
     // ======== ユーティリティ ========
@@ -325,338 +324,461 @@
 
     // 画像の事前ロード（固定URL）
     async function loadImageFromUrl(url) {
-      if (!url) { loadedImage = false; altPreviewFull.removeAttribute('src'); return false; }
-      return new Promise((resolve) => {
-        const test = new Image();
-        test.onload = () => { altPreviewFull.src = url; loadedImage = true; resolve(true); };
-        test.onerror = () => { loadedImage = false; altPreviewFull.removeAttribute('src'); resolve(false); };
-        test.crossOrigin = 'anonymous';
-        test.src = url;
-      });
+        if (!url) { loadedImage = false; altPreviewFull.removeAttribute('src'); return false; }
+        return new Promise((resolve) => {
+            const test = new Image();
+            test.onload = () => { altPreviewFull.src = url; loadedImage = true; resolve(true); };
+            test.onerror = () => { loadedImage = false; altPreviewFull.removeAttribute('src'); resolve(false); };
+            test.crossOrigin = 'anonymous';
+            test.src = url;
+        });
     }
 
     function unmetReasons() {
-      const reasons = [];
-      if (!el('participantId').value.trim()) reasons.push('被験者IDが未入力');
-
-      // 製品名は固定のためチェック不要
-      if (false) reasons.push('製品名が未入力');
-
-      if (!stream) reasons.push('カメラが未準備（「カメラを準備」を押してください）');
-      if (!loadedImage) reasons.push('固定画像の読み込みに失敗（ALT_IMAGE_URL を確認）');
-      return reasons;
+        const reasons = [];
+        if (!el('participantId').value.trim()) reasons.push('被験者IDが未入力');
+        if (!stream) reasons.push('カメラが未準備（「カメラを準備」を押してください）');
+        if (!loadedImage) reasons.push('固定画像の読み込みに失敗（ALT_IMAGE_URL を確認）');
+        return reasons;
     }
 
-
     function updateStartUI() {
-      const reasons = unmetReasons();
-      const ok = reasons.length === 0;
-      btnStart.disabled = !ok;
-      btnStart.title = ok ? '' : ('開始できない理由：\n- ' + reasons.join('\n- '));
-      startHints.innerHTML = reasons.length
-        ? ('<span class="bad">開始できない理由：</span> ' + reasons.map(r => `<span class="bad">${r}</span>`).join(' / '))
-        : '<span class="good">開始可能です。② 撮影セッション開始 を押してください。</span>';
+        const reasons = unmetReasons();
+        const ok = reasons.length === 0;
+        btnStart.disabled = !ok;
+        btnStart.title = ok ? '' : ('開始できない理由：\n- ' + reasons.join('\n- '));
+        startHints.innerHTML = reasons.length
+            ? ('<span class="bad">開始できない理由：</span> ' + reasons.map(r => `<span class="bad">${r}</span>`).join(' / '))
+            : '<span class="good">開始可能です。② 撮影セッション開始 を押してください。</span>';
     }
 
     el('participantId').addEventListener('input', updateStartUI);
-    el('productName').addEventListener('input', updateStartUI);
 
     function pickSupportedMime() {
-      const cands = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm;codecs=h264', 'video/webm', 'video/mp4;codecs=h264', 'video/mp4'];
-      for (const m of cands) { if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
-      return '';
+        const cands = ['video/mp4', 'video/webm;codecs=vp8', 'video/webm'];
+        for (const m of cands) {
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m;
+        }
+        return '';
     }
+
     function updateProgress(p) { progressBar.style.width = `${Math.max(0, Math.min(100, p * 100))}%`; }
 
     async function setupCamera() {
-      try {
-        if (!window.isSecureContext) console.warn('Not a secure context (https). getUserMedia may fail.');
-        const facing = el('cameraFacing').value;
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true });
-        } catch (_) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            const facing = el('cameraFacing').value;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: facing },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: true
+                });
+            } catch (_) {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            }
+            preview.srcObject = stream;
+            await preview.play().catch(() => { });
+            supportMime = pickSupportedMime();
+            phaseLabel.textContent = '準備OK';
+        } catch (err) {
+            phaseLabel.textContent = 'カメラ開始に失敗';
+            alert('カメラ/マイク権限を許可してください。');
+        } finally {
+            applyFlip();
+            updateStartUI();
         }
-        preview.srcObject = stream; await preview.play().catch(() => { });
-        supportMime = pickSupportedMime(); phaseLabel.textContent = '準備OK';
-      } catch (err) {
-        phaseLabel.textContent = 'カメラ開始に失敗'; alert('カメラ/マイク権限を許可してください。');
-      } finally {
-        applyFlip(); updateStartUI();
-      }
     }
     btnSetup.addEventListener('click', setupCamera);
 
     // Safe filename sanitizer
     function sanitizeForFilename(s) {
-      return s
-        .replace(/[\x00-\x1F\x7F]/g, '_')                 // control chars
-        .replace(/[\\/:*?"<>|#%&{}$!'@+`=~;,]/g, '_')     // reserved/special
-        .replace(/\s+/g, '_');                              // whitespace to _
+        return s
+            .replace(/[\x00-\x1F\x7F]/g, '_')
+            .replace(/[\\/:*?"<>|#%&{}$!'@+`=~;,]/g, '_')
+            .replace(/\s+/g, '_');
     }
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     async function recordOne(productName) {
-      const countdownSec = Math.max(0, parseInt(el('countdownSec').value || '10', 10));
-      const recordSec = 20;
+        const countdownSec = Math.max(0, parseInt(el('countdownSec').value || '10', 10));
+        const recordSec = 20;
 
-      // Count down
-      phaseLabel.textContent = `カウントダウン (${productName})`;
-      for (let t = countdownSec; t > 0; t--) { timeLeft.textContent = `${t}s`; updateProgress((countdownSec - t) / countdownSec); await sleep(1000); }
-      timeLeft.textContent = '0s'; updateProgress(1);
+        // Count down
+        phaseLabel.textContent = `カウントダウン (${productName})`;
+        for (let t = countdownSec; t > 0; t--) {
+            timeLeft.textContent = `${t}s`;
+            updateProgress((countdownSec - t) / countdownSec);
+            await sleep(1000);
+        }
+        timeLeft.textContent = '0s';
+        updateProgress(1);
 
-      // Record
-      phaseLabel.textContent = '録画中'; updateProgress(0); chunks = [];
-      const mime = supportMime || undefined;
-      try { recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); } catch (e) { alert('このブラウザは録画に対応していません'); return; }
-      let stopped = false; const startAt = Date.now();
-      recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
-      recorder.onstop = () => { stopped = true; };
-      recorder.start();
+        // Record
+        phaseLabel.textContent = '録画中';
+        updateProgress(0);
+        chunks = [];
+        const mime = supportMime || undefined;
+        try {
+            recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        } catch (e) {
+            alert('このブラウザは録画に対応していません');
+            return;
+        }
+        let stopped = false;
+        const startAt = Date.now();
+        recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+        recorder.onstop = () => { stopped = true; };
+        recorder.start();
 
-      // Always fullscreen mask
-      overlay.style.display = 'block';
+        // Always fullscreen mask
+        overlay.style.display = 'block';
 
-      const targetMs = recordSec * 1000;
-      const tickInt = setInterval(() => {
-        const elapsed = Date.now() - startAt; const remain = Math.max(0, targetMs - elapsed);
-        timeLeft.textContent = `${Math.ceil(remain / 1000)}s`; updateProgress(elapsed / targetMs);
-      }, 200);
-      await sleep(targetMs);
-      try { recorder.stop(); } catch (_) { }
-      for (let k = 0; k < 10 && !stopped; k++) await sleep(100);
-      clearInterval(tickInt);
+        const targetMs = recordSec * 1000;
+        const tickInt = setInterval(() => {
+            const elapsed = Date.now() - startAt;
+            const remain = Math.max(0, targetMs - elapsed);
+            timeLeft.textContent = `${Math.ceil(remain / 1000)}s`;
+            updateProgress(elapsed / targetMs);
+        }, 200);
+        await sleep(targetMs);
+        try { recorder.stop(); } catch (_) { }
+        for (let k = 0; k < 10 && !stopped; k++) await sleep(100);
+        clearInterval(tickInt);
 
-      // Hide overlay
-      overlay.style.display = 'none';
+        // Hide overlay
+        overlay.style.display = 'none';
 
-      const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'video/webm' });
-      const durationMs = Date.now() - startAt;
+        const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'video/webm' });
+        const durationMs = Date.now() - startAt;
 
-      // Auto download (video)
-      const id = el('participantId').value.trim() || 'Unknown';
-      const seqNum = clipsTableBody.children.length + 1; const seq = String(seqNum).padStart(2, '0');
-      const safeProd = sanitizeForFilename(productName);
-      const ext = (recorder.mimeType || mime || 'video/webm').includes('mp4') ? 'mp4' : 'webm';
-      const filename = `${id}_${seq}_${safeProd}.${ext}`;
-      const tmpUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = tmpUrl; a.download = filename; document.body.appendChild(a); a.click();
-      setTimeout(() => { URL.revokeObjectURL(tmpUrl); a.remove(); }, 1500);
+        // Auto download (video)
+        const id = el('participantId').value.trim() || 'Unknown';
+        const seqNum = clipsTableBody.children.length + 1;
+        const seq = String(seqNum).padStart(2, '0');
+        const safeProd = sanitizeForFilename(productName);
+        const ext = (recorder.mimeType || mime || 'video/webm').includes('mp4') ? 'mp4' : 'webm';
+        const filename = `${id}_${seq}_${safeProd}.${ext}`;
+        const tmpUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = tmpUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(tmpUrl); a.remove(); }, 1500);
 
-      // ▼ 録画後 自動解析（Blendshape CSVのみ）
-      if (window.processAnalysis) {
-        const base = filename.replace(/\.(webm|mp4)$/i, "");
-        window.processAnalysis(blob, {
-          filenameBase: base,
-          maxAnalyticFps: 30   // 実fpsに応じて自動調整（上限12fps）
-        });
-      }
-      // ▲ 自動解析ここまで
+        // ▼ 録画後 自動解析（Blendshape CSVのみ）
+        if (window.processAnalysis) {
+            const base = filename.replace(/\.(webm|mp4)$/i, "");
+            await window.processAnalysis(blob, {
+                filenameBase: base,
+                maxAnalyticFps: 10  // Safari用に低めに設定
+            });
+        }
+        // ▲ 自動解析ここまで
 
-      // Row for re-download
-      const tr = document.createElement('tr'); const url = URL.createObjectURL(blob);
-      tr.innerHTML = `<td>${seqNum}</td><td>${productName}</td><td>${(durationMs / 1000).toFixed(1)} s</td><td><a download="${filename}" href="${url}">${filename}</a></td>`;
-      clipsTableBody.appendChild(tr);
-
-      phaseLabel.textContent = '解析中...'; timeLeft.textContent = ''; updateProgress(0);
+        // 完了メッセージ
+        phaseLabel.textContent = '録画と解析が終了しました';
+        timeLeft.textContent = '';
+        updateProgress(0);
     }
 
     btnStart.addEventListener('click', async () => {
-      // 固定画像の読み込みを最終確認
-      const ok = await loadImageFromUrl(ALT_IMAGE_URL);
-      if (!ok) { alert('固定画像URL (ALT_IMAGE_URL) を確認してください。'); return; }
+        // 固定画像の読み込みを最終確認
+        const ok = await loadImageFromUrl(ALT_IMAGE_URL);
+        if (!ok) { alert('固定画像URL (ALT_IMAGE_URL) を確認してください。'); return; }
 
-      const id = el('participantId').value.trim();
-      const productName = el('productName').value.trim() || 'Product';
-      if (!id) { alert('被験者IDを入力してください'); return; }
-      if (!stream) { alert('先に「カメラを準備」を押してください。'); return; }
+        const id = el('participantId').value.trim();
+        const productName = el('productName').value.trim() || 'Product';
+        if (!id) { alert('被験者IDを入力してください'); return; }
+        if (!stream) { alert('先に「カメラを準備」を押してください。'); return; }
 
-      btnStart.disabled = true;
-      el('participantId').disabled = true; el('productName').disabled = true; el('cameraFacing').disabled = true; btnSetup.disabled = true;
+        btnStart.disabled = true;
+        el('participantId').disabled = true;
+        el('productName').disabled = true;
+        el('cameraFacing').disabled = true;
+        btnSetup.disabled = true;
 
-      await recordOne(productName);
+        await recordOne(productName);
 
-      // 1本撮影後：再度やり直したい場合に備えて入力を戻す
-      btnStart.disabled = false;
-      el('participantId').disabled = false; el('productName').disabled = false; el('cameraFacing').disabled = false; btnSetup.disabled = false;
-      updateStartUI();
+        // 1本撮影後：再度やり直したい場合に備えて入力を戻す
+        btnStart.disabled = false;
+        el('participantId').disabled = false;
+        el('productName').disabled = false;
+        el('cameraFacing').disabled = false;
+        btnSetup.disabled = false;
+        updateStartUI();
     });
 
-    async function updateStartUIInit() { await loadImageFromUrl(ALT_IMAGE_URL); updateStartUI(); applyFlip(); }
+    async function updateStartUIInit() {
+        await loadImageFromUrl(ALT_IMAGE_URL);
+        updateStartUI();
+        applyFlip();
+    }
     document.addEventListener('DOMContentLoaded', updateStartUIInit);
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && preview.srcObject) preview.play().catch(() => { }); });
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && preview.srcObject)
+            preview.play().catch(() => { });
+    });
 
     // Diagnose
     btnDiag.addEventListener('click', async () => {
-      try {
-        const secure = window.isSecureContext;
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) { alert('enumerateDevices() が利用できません。'); return; }
-        const list = await navigator.mediaDevices.enumerateDevices();
-        const summary = list.map(d => `${d.kind} : ${d.label || '(未許可)'} : ${d.deviceId ? d.deviceId.slice(0, 6) + '…' : ''}`).join('\n');
-        alert('SecureContext: ' + secure + '\n' + 'デバイス一覧:\n' + summary + '\n\n※ (未許可) の場合、サイトのカメラ/マイク許可が必要です。');
-      } catch (e) { alert('診断に失敗しました: ' + (e && e.message ? e.message : e)); }
+        try {
+            const secure = window.isSecureContext;
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                alert('enumerateDevices() が利用できません。');
+                return;
+            }
+            const list = await navigator.mediaDevices.enumerateDevices();
+            const summary = list.map(d => `${d.kind} : ${d.label || '(未許可)'} : ${d.deviceId ? d.deviceId.slice(0, 6) + '…' : ''}`).join('\n');
+            alert('SecureContext: ' + secure + '\n' + 'デバイス一覧:\n' + summary + '\n\n※ (未許可) の場合、サイトのカメラ/マイク許可が必要です。');
+        } catch (e) {
+            alert('診断に失敗しました: ' + (e && e.message ? e.message : e));
+        }
     });
-  </script>
+</script>
 
-  <!-- ▼ 解析用依存: MediaPipe Tasks（FaceLandmarker）のみを読み込み・初期化し、processAnalysis() を公開 -->
-  <script type="module">
+<!-- ▼ 解析用依存: MediaPipe Tasks（FaceLandmarker）Safari最適化版 -->
+<script type="module">
     import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.13/vision_bundle.mjs";
 
-    // WASMローダ（URLは元のまま）
-    const fileset = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.13/wasm"
-    );
+    let faceLandmarker = null;
+    let isInitialized = false;
 
-    // FaceLandmarker（blendshape出力ON）
-    const faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-      outputFaceBlendshapes: true
-    });
+    // WASMローダ（Safari用エラーハンドリング強化）
+    async function initializeFaceLandmarker() {
+        if (isInitialized && faceLandmarker) return faceLandmarker;
+
+        try {
+            const fileset = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.13/wasm"
+            );
+
+            faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+                baseOptions: {
+                    modelAssetPath:
+                        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                    delegate: "GPU"  // Safari用にGPU指定
+                },
+                runningMode: "VIDEO",
+                numFaces: 1,
+                outputFaceBlendshapes: true
+            });
+
+            isInitialized = true;
+            console.log("FaceLandmarker initialized successfully");
+            return faceLandmarker;
+        } catch (error) {
+            console.error("FaceLandmarker initialization error:", error);
+            throw error;
+        }
+    }
 
     function downloadBlob(blob, filename) {
-      const url = URL.createObjectURL(blob);
-      const a = Object.assign(document.createElement("a"), { href: url, download: filename });
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+        const url = URL.createObjectURL(blob);
+        const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
     }
 
-    // 実効fpsを推定（requestVideoFrameCallback 利用）
-    async function detectVideoFps(video, maxSamples = 20, minDuration = 0.5) {
-      return new Promise((resolve) => {
-        if (!("requestVideoFrameCallback" in HTMLVideoElement.prototype)) {
-          // 対応していない場合はフォールバック値
-          resolve(30);
-          return;
-        }
-        let firstTime = null;
-        let lastTime = null;
-        let count = 0;
+    // Safari用: 動画シーク処理（タイムアウト・リトライ機能付き）
+    async function seekVideoSafari(video, targetTime, maxRetries = 3) {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        video.removeEventListener("seeked", onSeeked);
+                        reject(new Error(`Seek timeout at ${targetTime}s`));
+                    }, 2000);
 
-        function step(now, meta) {
-          if (firstTime === null) {
-            firstTime = meta.mediaTime;
-            lastTime = meta.mediaTime;
-          } else {
-            lastTime = meta.mediaTime;
-            count++;
-          }
-          const dur = lastTime - firstTime;
-          if ((dur >= minDuration && count >= 5) || count >= maxSamples) {
-            const fps = dur > 0 ? count / dur : 0;
-            video.pause();
-            video.currentTime = 0;
-            resolve(fps || 30);
-            return;
-          }
-          video.requestVideoFrameCallback(step);
-        }
+                    const onSeeked = () => {
+                        clearTimeout(timeout);
+                        video.removeEventListener("seeked", onSeeked);
+                        resolve();
+                    };
 
-        video.play().then(() => {
-          video.requestVideoFrameCallback(step);
-        }).catch(() => {
-          // 再生できない場合もフォールバック
-          resolve(30);
-        });
-      });
+                    video.addEventListener("seeked", onSeeked);
+                    video.currentTime = targetTime;
+                });
+
+                // シーク成功後、フレームが準備できるまで待機
+                await new Promise(r => setTimeout(r, 100));
+                return true;
+            } catch (error) {
+                console.warn(`Seek attempt ${attempt + 1} failed:`, error);
+                if (attempt === maxRetries - 1) {
+                    console.error(`Failed to seek to ${targetTime}s after ${maxRetries} attempts`);
+                    return false;
+                }
+                await new Promise(r => setTimeout(r, 200));
+            }
+        }
+        return false;
     }
 
-    // 公開API：録画Blob → Blendshape CSV を自動DL（フレーム画像は保存しない）
-    // opts: { filenameBase?: string, maxAnalyticFps?: number }
+    // 公開API：録画Blob → Blendshape CSV を自動DL（Safari最適化）
     window.processAnalysis = async function processAnalysis(videoBlob, opts = {}) {
-      const {
-        filenameBase = "analysis",
-        maxAnalyticFps = 30   // 実fpsに対する上限（例: 12fps）
-      } = opts;
+        const {
+            filenameBase = "analysis",
+            maxAnalyticFps = 10  // Safari用に10fpsに制限
+        } = opts;
 
-      const phaseLabel = document.getElementById("phaseLabel");
+        const phaseLabel = document.getElementById("phaseLabel");
+        if (phaseLabel) phaseLabel.textContent = "解析準備中...";
 
-      if (phaseLabel) phaseLabel.textContent = "解析中（表情推定）";
+        // FaceLandmarkerの初期化
+        try {
+            await initializeFaceLandmarker();
+        } catch (error) {
+            alert("表情解析の初期化に失敗しました: " + error.message);
+            if (phaseLabel) phaseLabel.textContent = "解析初期化失敗";
+            return;
+        }
 
-      const v = document.createElement("video");
-      v.src = URL.createObjectURL(videoBlob);
-      v.muted = true;
-      v.playsInline = true;
+        if (phaseLabel) phaseLabel.textContent = "動画読み込み中...";
 
-      await new Promise((res, rej) => {
-        v.onloadedmetadata = () => res();
-        v.onerror = () => rej(new Error("動画の読み込みに失敗しました"));
-      });
+        const v = document.createElement("video");
+        v.src = URL.createObjectURL(videoBlob);
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = "auto";
 
-      const duration = v.duration;
-      const width = v.videoWidth || 640;
-      const height = v.videoHeight || 360;
-
-      // 実効fpsを推定し、解析fpsを決定
-      let detectedFps = 30;
-      try {
-        detectedFps = await detectVideoFps(v);
-      } catch (e) {
-        detectedFps = 30;
-      }
-      const analyticFps = Math.max(1, Math.min(maxAnalyticFps, Math.round(detectedFps || 30)));
-
-      const canvas = document.createElement("canvas");
-      canvas.width = width; canvas.height = height;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-      const totalFrames = Math.max(1, Math.floor(duration * analyticFps));
-      const times = Array.from({ length: totalFrames }, (_, i) =>
-        Math.min(i / analyticFps, duration - 1e-4)
-      );
-
-      let csvHeader = null;
-      const csvRows = [];
-      csvRows.push(["timestamp_ms"]);
-
-      for (let i = 0; i < times.length; i++) {
-        const t = times[i];
-        await new Promise((res) => {
-          const onSeek = () => { v.removeEventListener("seeked", onSeek); res(); };
-          v.addEventListener("seeked", onSeek);
-          v.currentTime = t;
+        // メタデータの読み込みを待機
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("動画のメタデータ読み込みタイムアウト")), 10000);
+            v.onloadedmetadata = () => {
+                clearTimeout(timeout);
+                resolve();
+            };
+            v.onerror = () => {
+                clearTimeout(timeout);
+                reject(new Error("動画の読み込みに失敗しました"));
+            };
         });
 
-        ctx.drawImage(v, 0, 0, width, height);
+        const duration = v.duration;
+        const width = v.videoWidth || 640;
+        const height = v.videoHeight || 360;
 
-        const nowMs = Math.round(t * 1000);
-        const result = faceLandmarker.detectForVideo(v, nowMs);
+        console.log(`Video loaded: ${width}x${height}, duration: ${duration}s`);
 
-        let row = [String(nowMs)];
-        if (result?.faceBlendshapes?.length) {
-          const cats = result.faceBlendshapes[0].categories || [];
-          if (!csvHeader) {
-            csvHeader = ["timestamp_ms", ...cats.map(c => c.categoryName)];
-            csvRows[0] = csvHeader;
-          }
-          const values = cats.map(c => c.score != null ? c.score.toFixed(6) : "");
-          row = [String(nowMs), ...values];
-        } else {
-          if (!csvHeader) csvHeader = ["timestamp_ms"];
+        // Safari用: 解析フレームレートを固定（低めに設定）
+        const analyticFps = Math.min(maxAnalyticFps, 10);
+        const totalFrames = Math.max(1, Math.floor(duration * analyticFps));
+        const times = Array.from({ length: totalFrames }, (_, i) =>
+            Math.min(i / analyticFps, duration - 0.1)
+        );
+
+        console.log(`Will analyze ${totalFrames} frames at ${analyticFps} fps`);
+
+        // Canvas準備（Safari用にシンプルな設定）
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+
+        if (phaseLabel) phaseLabel.textContent = "解析中（表情推定）0%";
+
+        let csvHeader = null;
+        const csvRows = [];
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < times.length; i++) {
+            const t = times[i];
+
+            // シーク処理
+            const seekSuccess = await seekVideoSafari(v, t);
+            if (!seekSuccess) {
+                console.warn(`Skipping frame ${i} due to seek failure`);
+                failCount++;
+                continue;
+            }
+
+            // Canvas に描画
+            try {
+                ctx.drawImage(v, 0, 0, width, height);
+            } catch (error) {
+                console.error(`Failed to draw frame ${i}:`, error);
+                failCount++;
+                continue;
+            }
+
+            const nowMs = Math.round(t * 1000);
+
+            // Blendshape解析
+            try {
+                const result = faceLandmarker.detectForVideo(v, nowMs);
+
+                let row = [String(nowMs)];
+                if (result?.faceBlendshapes?.length) {
+                    const cats = result.faceBlendshapes[0].categories || [];
+                    if (!csvHeader) {
+                        csvHeader = ["timestamp_ms", ...cats.map(c => c.categoryName)];
+                        csvRows.push(csvHeader);
+                    }
+                    const values = cats.map(c => c.score != null ? c.score.toFixed(6) : "0.000000");
+                    row = [String(nowMs), ...values];
+                } else {
+                    if (!csvHeader) {
+                        csvHeader = ["timestamp_ms"];
+                        csvRows.push(csvHeader);
+                    }
+                }
+                csvRows.push(row);
+                successCount++;
+            } catch (error) {
+                console.error(`Error analyzing frame ${i}:`, error);
+                // エラーが出ても空データで続行
+                if (!csvHeader) {
+                    csvHeader = ["timestamp_ms"];
+                    csvRows.push(csvHeader);
+                }
+                csvRows.push([String(nowMs)]);
+                failCount++;
+            }
+
+            // 進捗表示（5%刻み）
+            if ((i % Math.max(1, Math.floor(totalFrames / 20))) === 0 && phaseLabel) {
+                const pct = Math.round(((i + 1) / totalFrames) * 100);
+                phaseLabel.textContent = `解析中… ${pct}%`;
+            }
         }
-        csvRows.push(row);
 
-        if ((i % Math.max(1, Math.floor(totalFrames / 10))) === 0 && phaseLabel) {
-          phaseLabel.textContent = `解析中… ${Math.round((i / totalFrames) * 100)}%`;
-        }
-      }
+        console.log(`Analysis complete: ${successCount} success, ${failCount} failures`);
 
-      const csvText = csvRows.map(cols =>
-        cols.map(v => (v?.includes(",") ? `"${v.replace(/"/g, '""')}"` : (v ?? ""))).join(",")
-      ).join("\n");
-      downloadBlob(new Blob([csvText], { type: "text/csv;charset=utf-8" }), `${filenameBase}_blendshape.csv`);
+        // CSV生成
+        const csvText = csvRows.map(cols =>
+            cols.map(v => (v?.includes(",") ? `"${v.replace(/"/g, '""')}"` : (v ?? ""))).join(",")
+        ).join("\n");
 
-      URL.revokeObjectURL(v.src);
-      // 解析完了時の表示を固定
-      if (phaseLabel) phaseLabel.textContent = "録画と解析が終了しました";
+        // CSV自動ダウンロード
+        downloadBlob(
+            new Blob([csvText], { type: "text/csv;charset=utf-8" }),
+            `${filenameBase}_blendshape.csv`
+        );
+
+        // クリーンアップ
+        URL.revokeObjectURL(v.src);
+        v.remove();
+
+        if (phaseLabel) phaseLabel.textContent = "録画と解析が終了しました";
+        console.log("Analysis and download complete");
     };
-  </script>
+
+    // 初期化を先に行う（ページロード時）
+    document.addEventListener('DOMContentLoaded', () => {
+        initializeFaceLandmarker().catch(err => {
+            console.error("Failed to pre-initialize FaceLandmarker:", err);
+        });
+    });
+</script>
+<!-- ▲ 解析用依存ここまで ▲ -->
   <!-- ▲ 解析用依存ここまで ▲ -->
 
 </body>
