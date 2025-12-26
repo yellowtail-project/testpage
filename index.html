@@ -135,11 +135,19 @@
         .hidden {
             display: none !important;
         }
+
+        .invisible {
+            visibility: hidden;
+            /* 見えない */
+            pointer-events: none;
+            height: 0;
+            /* 画面占有を減らしたい場合 */
+        }
     </style>
 </head>
 
 <body>
-    <h2>1647_録画 → 自動保存（動画.webm / 解析.csv）</h2>
+    <h2>1658_録画 → 自動保存（動画.webm / 解析.csv）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -695,7 +703,9 @@
                 });
 
                 //blob再生画面を一旦隠す（解析安定性のため）
-                playback.classList.add("hidden");
+                // playback.classList.add("hidden");
+                playback.classList.add("invisible");
+
 
 
                 // 解析（CSV生成）
@@ -742,7 +752,8 @@
                 );
 
                 //録画blobビュー再表示
-                playback.classList.remove("hidden");
+                playback.classList.remove("invisible");
+
 
 
                 btnRec.disabled = false;
