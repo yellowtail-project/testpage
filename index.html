@@ -131,11 +131,15 @@
         .mirror {
             transform: scaleX(-1);
         }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 
 <body>
-    <h2>251226_1558_録画 → 自動保存（動画.webm / 解析.csv）</h2>
+    <h2>1033_録画 → 自動保存（動画.webm / 解析.csv）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -668,6 +672,10 @@
                     playback.onloadedmetadata = () => res();
                 });
 
+                //blob再生画面を一旦隠す（解析安定性のため）
+                playback.classList.add("hidden");
+
+
                 // 解析（CSV生成）
                 try {
                     await analyzeVideoFramesBySeekingToCsv();
@@ -710,6 +718,10 @@
                     `mime: ${actualMime || "(unknown)"}\n` +
                     `（再ダウンロードリンクも作成済み）`
                 );
+
+                //録画blobビュー再表示
+                playback.classList.remove("hidden");
+
 
                 btnRec.disabled = false;
                 btnCam.disabled = false;
