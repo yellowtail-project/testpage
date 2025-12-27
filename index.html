@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>2054_録画 → 自動保存（動画.webm / 解析.csv）</h2>
+    <h2>20251227__録画 → 自動保存（動画 / 解析）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -749,8 +749,8 @@
 
             recorder.start();
 
-            // 録画時間は「カウントダウン」ではなく、固定で3秒のままにする想定（必要ならUI追加で変更可）
-            const RECORD_SECONDS = 3;
+            // 録画時間は「カウントダウン」ではなく、固定で20秒のままにする想定（必要ならUI追加で変更可）
+            const RECORD_SECONDS = 20;
             setTimeout(() => {
                 if (recorder && recorder.state !== "inactive") recorder.stop();
             }, RECORD_SECONDS * 1000);
