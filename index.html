@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>20251227__録画 → 自動保存（動画 / 解析）</h2>
+    <h2>20251227_1224_録画 → 自動保存（動画 / 解析）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -378,6 +378,57 @@
 
             return faceLandmarker;
         }
+        // 画面を消さない処理
+        let wakeLock = null;
+
+        async function requestWakeLock() {
+            try {
+                if (!("wakeLock" in navigator)) return false;
+
+                // 画面を消さない
+                wakeLock = await navigator.wakeLock.request("screen");
+
+                // 端末/OS都合で解除されることがあるので監視
+                wakeLock.addEventListener("release", () => {
+                    // console.log("WakeLock released");
+                    wakeLock = null;
+                });
+
+                return true;
+            } catch (e) {
+                // NotAllowedError: ユーザー操作起点じゃない等
+                // NotSupportedError: 未対応ブラウザ等
+                // console.warn("WakeLock failed:", e);
+                wakeLock = null;
+                return false;
+            }
+        }
+
+        async function releaseWakeLock() {
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                }
+            } catch {
+                wakeLock = null;
+            }
+        }
+
+        // タブが非表示→表示に戻った時に取り直す（解除されていることが多い）
+        document.addEventListener("visibilitychange", async () => {
+            if (document.visibilityState === "visible") {
+                // 解析中/録画中だけ取りたいなら、ここにフラグ条件を入れる
+                await requestWakeLock();
+            } else {
+                await releaseWakeLock();
+            }
+        });
+
+        // 画面を消さない処理ココまで
+
+
+
 
         function sleep(ms) {
             return new Promise((r) => setTimeout(r, ms));
@@ -608,6 +659,9 @@
         });
 
         btnRec.addEventListener("click", async () => {
+            // 画面OFF防止（ユーザー操作起点で）
+            await requestWakeLock();
+
             // ユーザー操作起点でまとめて実行（自動DLが通りやすい）
             const names = makeFileNames();
             if (!names) {
@@ -741,6 +795,9 @@
 
                 //録画blobビュー再表示
                 playback.classList.remove("hidden");
+
+                //画面スリープを再開
+                await releaseWakeLock();
 
 
                 btnRec.disabled = false;
