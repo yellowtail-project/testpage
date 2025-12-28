@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>20251228_1750_録画 → 自動保存（動画 / 解析）</h2>
+    <h2>20251228_1803_録画 → 自動保存（動画 / 解析）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -264,6 +264,9 @@
 
         let captureFps = 30;
 
+        let lastDelegateLabel = "";
+
+
         // 保存用（再ダウンロード用URL）
         let lastVideoBlobUrl = null;
         let lastCsvBlobUrl = null;
@@ -386,9 +389,18 @@
                 numFaces: 1,
             });
 
-            setStatus(`MediaPipe初期化OK / delegate=${useCpu ? "CPU" : "GPU"}`);
+            lastDelegateLabel = useCpu ? "CPU" : "GPU";
+            setStatus(`MediaPipe初期化OK / delegate=${lastDelegateLabel}`);
+
             return faceLandmarker;
         }
+
+        function setStatus(msg) {
+            statusEl.textContent = lastDelegateLabel
+                ? `${msg}\n(delegate=${lastDelegateLabel})`
+                : msg;
+        }
+
 
         // 画面を消さない処理
         let wakeLock = null;
