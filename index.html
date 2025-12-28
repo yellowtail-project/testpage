@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>20251227_1224_録画 → 自動保存（動画 / 解析）</h2>
+    <h2>20251228_1750_録画 → 自動保存（動画 / 解析）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -356,6 +356,16 @@
             return url;
         }
 
+        function isIPhone() {
+            // iPhoneだけを判定（iPadは除外）
+            // iPadOSは "Macintosh" を名乗ることがあるが、iPhoneは基本 "iPhone" を含む
+            return /iPhone/i.test(navigator.userAgent);
+        }
+
+        function isAndroid() {
+            return /Android/i.test(navigator.userAgent);
+        }
+
         async function initMediapipe() {
             if (faceLandmarker) return faceLandmarker;
 
@@ -363,21 +373,23 @@
                 "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm"
             );
 
-            const isAndroid = /Android/i.test(navigator.userAgent);
+            const useCpu = isAndroid() || isIPhone();
 
             faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
                 baseOptions: {
                     modelAssetPath:
                         "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                    delegate: isAndroid ? "CPU" : "GPU",
+                    delegate: useCpu ? "CPU" : "GPU",
                 },
                 runningMode: "VIDEO",
                 outputFaceBlendshapes: true,
                 numFaces: 1,
             });
 
+            setStatus(`MediaPipe初期化OK / delegate=${useCpu ? "CPU" : "GPU"}`);
             return faceLandmarker;
         }
+
         // 画面を消さない処理
         let wakeLock = null;
 
