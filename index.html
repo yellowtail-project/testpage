@@ -139,7 +139,7 @@
 </head>
 
 <body>
-    <h2>20251228_1803_録画 → 自動保存（動画 / 解析）</h2>
+    <h2>20251228_1809_録画 → 自動保存（動画 / 解析）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -322,9 +322,19 @@
         }
         //変更点２ここまで
 
+        //        function setStatus(msg) {
+        //            statusEl.textContent = msg;
+        //        }
+
+
         function setStatus(msg) {
-            statusEl.textContent = msg;
+            statusEl.textContent = lastDelegateLabel
+                ? `${msg}\n(delegate=${lastDelegateLabel})`
+                : msg;
         }
+
+
+
 
         function sanitizeFilePart(s) {
             // ファイル名に使えない文字をざっくり除去
@@ -395,11 +405,6 @@
             return faceLandmarker;
         }
 
-        function setStatus(msg) {
-            statusEl.textContent = lastDelegateLabel
-                ? `${msg}\n(delegate=${lastDelegateLabel})`
-                : msg;
-        }
 
 
         // 画面を消さない処理
