@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>iPad Safari - 録画 + 自動保存（動画/CSV）</title>
+    <title>iPad Safari - 録画 + 自動保存（動画）</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -104,9 +104,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            /* 中央寄せ */
             width: 320px;
-            /* video幅に合わせる（既存と整合） */
             max-width: 100%;
         }
 
@@ -117,29 +115,22 @@
 
         .flipCtl {
             margin-top: 8px;
-            /* 真下に余白 */
             display: inline-flex;
             gap: 8px;
             align-items: center;
             justify-content: center;
             width: 100%;
-            /* プレビュー幅いっぱいの中央 */
             user-select: none;
         }
 
-
         .mirror {
             transform: scaleX(-1);
-        }
-
-        .hidden {
-            display: none !important;
         }
     </style>
 </head>
 
 <body>
-    <h2>20251228_1809_録画 → 自動保存（動画 / 解析）</h2>
+    <h2>20251228_1809_録画 → 自動保存（動画）</h2>
 
     <p class="hint">
         ※HTTPSで配信してください。Safariのダウンロード保存は、端末設定や操作（保存先選択）により挙動が変わります。
@@ -160,7 +151,6 @@
             <input id="countdownSec" type="number" min="0" step="1" value="3" style="width: 160px;" />
         </div>
     </div>
-
 
     <div class="row" style="margin-top: 12px;">
         <button id="btnCam">カメラ起動（インカメ）</button>
@@ -185,25 +175,19 @@
                 カメラをフリップ（左右反転）
             </label>
         </div>
-
-
-
     </div>
 
     <div style="margin-top: 12px;">
         <div class="hint">再ダウンロードリンク</div>
         <div class="links">
             <a id="videoLink" href="#" download>動画を再ダウンロード</a>
-            <a id="csvLink" href="#" download>CSVを再ダウンロード</a>
         </div>
     </div>
 
-    <div>
+    <div style="margin-top: 12px;">
         <div class="hint">録画Blob再生</div>
         <video id="playback" playsinline controls></video>
     </div>
-
-
 
     <div style="margin-top: 12px;">
         <div class="hint">ステータス</div>
@@ -216,33 +200,18 @@
     </div>
 
     <script type="module">
-        import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21";
-
         // ===== 設定（ここだけ変えればOK） =====
         const PRODUCT_NAME = "PRODUCT"; // 事前指定の製品名（例: "kirei" などに変更）
-        const RECORDING_OVERLAY_IMAGE_URL = "https://yellowtail-project.github.io/testpage/test_background3.png"; // 録画中に全画面表示する画像URL
+        const RECORDING_OVERLAY_IMAGE_URL = "https://yellowtail-project.github.io/testpage/test_background3.png";
+        const RECORD_SECONDS = 20; // 録画秒数
         // ===================================
 
         const btnCam = document.getElementById("btnCam");
         const btnRec = document.getElementById("btnRec");
         const preview = document.getElementById("preview");
-        const flipCam = document.getElementById("flipCam");
-
-        // 初期状態（任意：インカメの見た目を「鏡」にしたいなら true に）
-        flipCam.checked = true
-
-        function applyPreviewFlip() {
-            preview.classList.toggle("mirror", flipCam.checked);
-        }
-
-        flipCam.addEventListener("change", applyPreviewFlip);
-        applyPreviewFlip();
-
-
-
-
         const playback = document.getElementById("playback");
 
+        const flipCam = document.getElementById("flipCam");
         const userIdEl = document.getElementById("userId");
         const countdownSecEl = document.getElementById("countdownSec");
 
@@ -251,7 +220,6 @@
 
         const statusEl = document.getElementById("status");
         const videoLink = document.getElementById("videoLink");
-        const csvLink = document.getElementById("csvLink");
 
         const overlay = document.getElementById("overlay");
         const overlayImg = document.getElementById("overlayImg");
@@ -260,103 +228,74 @@
         let stream = null;
         let recorder = null;
         let chunks = [];
-        let faceLandmarker = null;
 
-        let captureFps = 30;
-
-        let lastDelegateLabel = "";
-
-
-        // 保存用（再ダウンロード用URL）
+        // 再ダウンロード用URL
         let lastVideoBlobUrl = null;
-        let lastCsvBlobUrl = null;
 
-        // ===== 変更①：CSV用の保持形式を「横持ち」に変更（グローバル付近） =====
-        // 解析結果（CSV用）
-        // 1行 = 1タイムスタンプ、列 = 各blendshape
-        let blendshapeNames = []; // ヘッダー（categoryName一覧）
-        let frameRows = [];       // { t: "0.033", values: number[] | null } の配列
+        // 初期状態（任意：インカメの見た目を「鏡」にしたいなら true に）
+        flipCam.checked = true;
 
-        // 変更点２
-        function pickBestRecorderMimeType() {
-            if (!("MediaRecorder" in window) || typeof MediaRecorder.isTypeSupported !== "function") {
-                return ""; // 未対応 or 判定不可 → 指定なしで作る
-            }
-
-            // mp4優先（できるだけ緩い→厳しい順）
-            const mp4Candidates = [
-                "video/mp4",
-                "video/mp4;codecs=avc1,mp4a.40.2",
-                "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-                "video/mp4;codecs=h264,aac",
-            ];
-
-            for (const t of mp4Candidates) {
-                try {
-                    if (MediaRecorder.isTypeSupported(t)) return t;
-                } catch { }
-            }
-
-            // mp4が無理なら webm（Chrome/Android/Windowsで強い）
-            const webmCandidates = [
-                "video/webm",
-                "video/webm;codecs=vp9,opus",
-                "video/webm;codecs=vp8,opus",
-                "video/webm;codecs=vp8",
-            ];
-
-            for (const t of webmCandidates) {
-                try {
-                    if (MediaRecorder.isTypeSupported(t)) return t;
-                } catch { }
-            }
-
-            return ""; // どれもダメなら指定なし
+        function applyPreviewFlip() {
+            preview.classList.toggle("mirror", flipCam.checked);
         }
-
-        function extFromMime(mime) {
-            const m = (mime || "").toLowerCase();
-            if (m.includes("video/mp4")) return "mp4";
-            if (m.includes("video/webm")) return "webm";
-            return "webm"; // 不明時は従来どおりwebm扱い（運用に合わせて変更可）
-        }
-        //変更点２ここまで
-
-        //        function setStatus(msg) {
-        //            statusEl.textContent = msg;
-        //        }
-
+        flipCam.addEventListener("change", applyPreviewFlip);
+        applyPreviewFlip();
 
         function setStatus(msg) {
-            statusEl.textContent = lastDelegateLabel
-                ? `${msg}\n(delegate=${lastDelegateLabel})`
-                : msg;
+            statusEl.textContent = msg;
         }
 
+        function sleep(ms) {
+            return new Promise((r) => setTimeout(r, ms));
+        }
 
+        function showOverlay(on) {
+            overlay.style.display = on ? "flex" : "none";
+        }
 
-
+        // ファイル名
         function sanitizeFilePart(s) {
-            // ファイル名に使えない文字をざっくり除去
             return String(s || "").trim().replace(/[\\\/:*?"<>|\s]+/g, "_");
         }
-
         function makeBaseName() {
             const uid = sanitizeFilePart(userIdEl.value);
             if (!uid) return null;
             return `${uid}_${PRODUCT_NAME}`;
         }
 
-        function makeFileNames() {
-            const base = makeBaseName();
-            if (!base) return null;
-            return {
-                base,              // ★追加：拡張子なし
-                video: `${base}.webm`, // ※互換のため残してもOK（使わない）
-                csv: `${base}.csv`,
-            };
+        // 端末ごとに録画mimeを良い感じに選ぶ（mp4優先→webm）
+        function pickBestRecorderMimeType() {
+            if (!("MediaRecorder" in window) || typeof MediaRecorder.isTypeSupported !== "function") {
+                return "";
+            }
+            const mp4Candidates = [
+                "video/mp4",
+                "video/mp4;codecs=avc1,mp4a.40.2",
+                "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+                "video/mp4;codecs=h264,aac",
+            ];
+            for (const t of mp4Candidates) {
+                try { if (MediaRecorder.isTypeSupported(t)) return t; } catch { }
+            }
+
+            const webmCandidates = [
+                "video/webm",
+                "video/webm;codecs=vp9,opus",
+                "video/webm;codecs=vp8,opus",
+                "video/webm;codecs=vp8",
+            ];
+            for (const t of webmCandidates) {
+                try { if (MediaRecorder.isTypeSupported(t)) return t; } catch { }
+            }
+            return "";
         }
 
+        function extFromMime(mime) {
+            const m = (mime || "").toLowerCase();
+            if (m.includes("video/mp4")) return "mp4";
+            if (m.includes("video/webm")) return "webm";
+            return "webm";
+        }
 
         function revokeIfAny(url) {
             if (url) URL.revokeObjectURL(url);
@@ -369,148 +308,15 @@
             return url;
         }
 
-        function isIPhone() {
-            // iPhoneだけを判定（iPadは除外）
-            // iPadOSは "Macintosh" を名乗ることがあるが、iPhoneは基本 "iPhone" を含む
-            return /iPhone/i.test(navigator.userAgent);
-        }
-
-        function isAndroid() {
-            return /Android/i.test(navigator.userAgent);
-        }
-
-        async function initMediapipe() {
-            if (faceLandmarker) return faceLandmarker;
-
-            const fileset = await FilesetResolver.forVisionTasks(
-                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm"
-            );
-
-            const useCpu = isAndroid() || isIPhone();
-
-            faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
-                baseOptions: {
-                    modelAssetPath:
-                        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                    delegate: useCpu ? "CPU" : "GPU",
-                },
-                runningMode: "VIDEO",
-                outputFaceBlendshapes: true,
-                numFaces: 1,
-            });
-
-            lastDelegateLabel = useCpu ? "CPU" : "GPU";
-            setStatus(`MediaPipe初期化OK / delegate=${lastDelegateLabel}`);
-
-            return faceLandmarker;
-        }
-
-
-
-        // 画面を消さない処理
-        let wakeLock = null;
-
-        async function requestWakeLock() {
-            try {
-                if (!("wakeLock" in navigator)) return false;
-
-                // 画面を消さない
-                wakeLock = await navigator.wakeLock.request("screen");
-
-                // 端末/OS都合で解除されることがあるので監視
-                wakeLock.addEventListener("release", () => {
-                    // console.log("WakeLock released");
-                    wakeLock = null;
-                });
-
-                return true;
-            } catch (e) {
-                // NotAllowedError: ユーザー操作起点じゃない等
-                // NotSupportedError: 未対応ブラウザ等
-                // console.warn("WakeLock failed:", e);
-                wakeLock = null;
-                return false;
-            }
-        }
-
-        async function releaseWakeLock() {
-            try {
-                if (wakeLock) {
-                    await wakeLock.release();
-                    wakeLock = null;
-                }
-            } catch {
-                wakeLock = null;
-            }
-        }
-
-        // タブが非表示→表示に戻った時に取り直す（解除されていることが多い）
-        document.addEventListener("visibilitychange", async () => {
-            if (document.visibilityState === "visible") {
-                // 解析中/録画中だけ取りたいなら、ここにフラグ条件を入れる
-                await requestWakeLock();
-            } else {
-                await releaseWakeLock();
-            }
-        });
-
-        // 画面を消さない処理ココまで
-
-
-
-
-        function sleep(ms) {
-            return new Promise((r) => setTimeout(r, ms));
-        }
-
-        function once(el, name) {
-            return new Promise((resolve, reject) => {
-                const onOk = () => {
-                    cleanup();
-                    resolve();
-                };
-                const onErr = (e) => {
-                    cleanup();
-                    reject(e);
-                };
-                const cleanup = () => {
-                    el.removeEventListener(name, onOk);
-                    el.removeEventListener("error", onErr);
-                };
-                el.addEventListener(name, onOk, { once: true });
-                el.addEventListener("error", onErr, { once: true });
-            });
-        }
-
-        async function waitForVideoFrame(video, timeoutMs = 250) {
-            // requestVideoFrameCallback が使えるなら「実フレーム更新」を待つ
-            if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-                await Promise.race([
-                    new Promise((resolve) => video.requestVideoFrameCallback(() => resolve())),
-                    sleep(timeoutMs), // タイムアウト（来ない端末でも止まらない）
-                ]);
-            } else {
-                // フォールバック：1フレーム相当待つ（Androidでも効くことが多い）
-                await sleep(33);
-            }
-        }
-
-        async function seekTo(timeSec) {
-            playback.currentTime = timeSec;
-            await once(playback, "seeked");
-
-            // 「seeked」= 時刻が動いただけ。ここで実フレーム更新を待つ
-            await waitForVideoFrame(playback, 250);
-
-            // 念のためデコード状態もチェック
-            if (playback.readyState < 2) {
-                await Promise.race([once(playback, "loadeddata"), sleep(250)]);
-            }
-        }
-
-
-        function showOverlay(on) {
-            overlay.style.display = on ? "flex" : "none";
+        function autoDownload(blob, filename) {
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
         }
 
         async function runCountdown(sec) {
@@ -526,7 +332,6 @@
             progressBar.style.width = "0%";
             progressText.textContent = `カウントダウン開始: ${total}s`;
 
-            // できるだけ滑らかに更新
             while (true) {
                 const now = performance.now();
                 const p = Math.min(1, (now - start) / (total * 1000));
@@ -539,116 +344,36 @@
             progressText.textContent = "開始";
         }
 
-        function autoDownload(blob, filename) {
-            // iOS Safariは「完全自動保存」が制限される場合があります。
-            // ただしユーザー操作（撮影開始ボタン）からの一連の処理内で a.click() は通りやすいです。
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = filename;
-            a.style.display = "none";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            // revokeは少し遅らせる（DL開始前に消える事故を避ける）
-            setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-        }
-
-        // ===== 変更②：rowsToCsv を「t + 各blendshape列」形式に差し替え =====
-        function rowsToCsv(rowsWide, names) {
-            const header = ["t_sec", ...names];
-
-            const escape = (v) => {
-                const s = String(v ?? "");
-                return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-            };
-
-            const lines = [header.map(escape).join(",")];
-
-            for (const r of rowsWide) {
-                // NO_FACE等でvaluesが無い場合は空欄で埋める
-                const vals = Array.isArray(r.values) ? r.values : new Array(names.length).fill("");
-                lines.push([r.t, ...vals].map(escape).join(","));
+        // 画面を消さない（対応ブラウザのみ）
+        let wakeLock = null;
+        async function requestWakeLock() {
+            try {
+                if (!("wakeLock" in navigator)) return false;
+                wakeLock = await navigator.wakeLock.request("screen");
+                wakeLock.addEventListener("release", () => { wakeLock = null; });
+                return true;
+            } catch {
+                wakeLock = null;
+                return false;
             }
-
-            return lines.join("\n");
         }
-
-
-        // ===== 変更③：analyzeVideoFramesBySeekingToCsv の中身（rowsを作る部分）を差し替え =====
-        async function analyzeVideoFramesBySeekingToCsv() {
-            const landmarker = await initMediapipe();
-            playback.pause();
-
-            if (!isFinite(playback.duration) || playback.duration <= 0) {
-                throw new Error("動画durationが取得できませんでした。");
-            }
-
-            const fps = Math.max(1, Math.round(captureFps || 30));
-            const step = 1 / fps;
-
-            const duration = playback.duration;
-            const totalFrames = Math.max(1, Math.floor(duration * fps));
-
-            // ★ここが変更：初期化
-            blendshapeNames = [];
-            frameRows = [];
-
-            for (let i = 0; i < totalFrames; i++) {
-                const t = i * step;
-                const tClamped = Math.min(Math.max(0, t), Math.max(0, duration - 0.0001));
-                await seekTo(tClamped);
-
-                const result = landmarker.detectForVideo(playback, t * 1000);
-                const face = result.faceBlendshapes?.[0];
-
-                if (!face) {
-                    // 顔なし：ヘッダー確定後なら空欄行、未確定なら一旦空で入れる
-                    frameRows.push({ t: tClamped.toFixed(3), values: null });
-                } else {
-                    // 初回にヘッダー（blendshape名）を確定
-                    if (blendshapeNames.length === 0) {
-                        blendshapeNames = face.categories.map((c) => c.categoryName);
-                    }
-
-                    // categoryName -> score の辞書を作って、ヘッダー順に並べる
-                    const map = new Map(face.categories.map((c) => [c.categoryName, c.score]));
-                    const values = blendshapeNames.map((name) => {
-                        const v = map.get(name);
-                        // 6桁固定（数値としてCSVに入る）
-                        return (typeof v === "number") ? Number(v).toFixed(6) : "";
-                    });
-
-                    frameRows.push({ t: tClamped.toFixed(3), values });
+        async function releaseWakeLock() {
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
                 }
-
-                if (i % 10 === 0) {
-                    setStatus(
-                        `解析中...\n` +
-                        `fps=${fps}, duration=${duration.toFixed(3)}s\n` +
-                        `frame ${i + 1}/${totalFrames}\n` +
-                        `rows=${frameRows.length}\n` +
-                        `cols=${blendshapeNames.length > 0 ? (1 + blendshapeNames.length) : "(ヘッダー未確定)"}`
-                    );
-                }
+            } catch {
+                wakeLock = null;
             }
-
-            // ヘッダーが最後まで確定しなかった（ずっとNO_FACE）場合の保険
-            if (blendshapeNames.length === 0) {
-                blendshapeNames = ["NO_FACE"];
-                // values=null の行を NO_FACE 列付き（空欄）にしてもOKだが、ここではそのまま
-            }
-
-            setStatus(
-                `解析完了\n` +
-                `fps=${fps}, duration=${duration.toFixed(3)}s\n` +
-                `frames=${totalFrames}, rows=${frameRows.length}\n` +
-                `cols=${1 + blendshapeNames.length}`
-            );
-
-            return { fps, duration, totalFrames };
         }
-
+        document.addEventListener("visibilitychange", async () => {
+            if (document.visibilityState === "visible") {
+                await requestWakeLock();
+            } else {
+                await releaseWakeLock();
+            }
+        });
 
         btnCam.addEventListener("click", async () => {
             setStatus("カメラ起動中...");
@@ -663,24 +388,11 @@
                     audio: false,
                 });
 
-                try {
-                    const track = stream.getVideoTracks()[0];
-                    const settings = track.getSettings?.() || {};
-                    if (typeof settings.frameRate === "number" && settings.frameRate > 0) {
-                        captureFps = settings.frameRate;
-                    } else {
-                        captureFps = 30;
-                    }
-                } catch {
-                    captureFps = 30;
-                }
-
                 preview.srcObject = stream;
                 applyPreviewFlip();
-                await initMediapipe();
 
                 btnRec.disabled = false;
-                setStatus(`カメラ起動OK（推定fps=${Math.round(captureFps)}）`);
+                setStatus("カメラ起動OK。次に「撮影開始」を押してください。");
             } catch (e) {
                 console.error(e);
                 setStatus("カメラ起動に失敗: " + e.message);
@@ -691,33 +403,24 @@
             // 画面OFF防止（ユーザー操作起点で）
             await requestWakeLock();
 
-            // ユーザー操作起点でまとめて実行（自動DLが通りやすい）
-            const names = makeFileNames();
-            if (!names) {
+            const base = makeBaseName();
+            if (!base) {
                 alert("ユーザーIDを入力してください");
                 return;
             }
 
             const countdownSec = Math.max(0, Number(countdownSecEl.value) || 0);
 
-            // 既存URLを破棄
+            // 既存URL破棄
             revokeIfAny(lastVideoBlobUrl);
-            revokeIfAny(lastCsvBlobUrl);
             lastVideoBlobUrl = null;
-            lastCsvBlobUrl = null;
             videoLink.href = "#";
-            csvLink.href = "#";
             videoLink.download = "";
-            csvLink.download = "";
 
             // カウントダウン
             btnRec.disabled = true;
             btnCam.disabled = true;
-            try {
-                await runCountdown(countdownSec);
-            } catch (e) {
-                console.error(e);
-            }
+            try { await runCountdown(countdownSec); } catch { }
 
             // 録画開始
             setStatus("録画開始...");
@@ -725,24 +428,21 @@
 
             try {
                 const preferredMime = pickBestRecorderMimeType();
-
                 try {
                     recorder = preferredMime
                         ? new MediaRecorder(stream, { mimeType: preferredMime })
                         : new MediaRecorder(stream);
-                } catch (e) {
-                    // mimeType指定が原因で落ちる環境もあるので、最後の砦
+                } catch {
                     recorder = new MediaRecorder(stream);
                 }
-
             } catch (e) {
                 setStatus("MediaRecorderが使えない/初期化できない: " + e.message);
                 btnRec.disabled = false;
                 btnCam.disabled = false;
+                await releaseWakeLock();
                 return;
             }
 
-            // 録画中は全画面画像を表示
             showOverlay(true);
 
             recorder.ondataavailable = (ev) => {
@@ -753,90 +453,42 @@
                 showOverlay(false);
 
                 const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+                const actualMime = blob.type || recorder.mimeType || "";
+                const videoExt = extFromMime(actualMime);
+                const videoFileName = `${base}.${videoExt}`;
+
                 setStatus(
                     `録画完了\n` +
                     `mimeType=${recorder.mimeType || "(unknown)"}\n` +
                     `Blob size=${blob.size.toLocaleString()} bytes\n` +
-                    `解析準備中...`
+                    `保存処理中...`
                 );
-
-                const actualMime = blob.type || recorder.mimeType || "";
-                const videoExt = extFromMime(actualMime);
-                const videoFileName = `${names.base}.${videoExt}`;  // ★ここが本命
-
 
                 // Blobを再生用videoへ
                 const url = URL.createObjectURL(blob);
                 playback.src = url;
                 playback.currentTime = 0;
 
-                await new Promise((res) => {
-                    if (playback.readyState >= 1) return res();
-                    playback.onloadedmetadata = () => res();
-                });
-
-                //blob再生画面を一旦隠す（解析安定性のため）
-                playback.classList.add("hidden");
-
-
-                // 解析（CSV生成）
-                try {
-                    await analyzeVideoFramesBySeekingToCsv();
-                } catch (e) {
-                    console.error(e);
-                    setStatus("解析に失敗: " + e.message);
-                    // 解析失敗でも動画保存リンクだけは作る
-                }
-
-
-                // ===== 変更④：CSV Blob生成部分（録画停止後）だけ差し替え =====
-                // 旧：const csvText = rowsToCsv(rows);
-                // 新：
-                const csvText = rowsToCsv(frameRows, blendshapeNames);
-                const csvBlob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
-
-
-                // 再ダウンロードリンクを作成（永続化はしない：メモリ上）
+                // 再ダウンロードリンク
                 lastVideoBlobUrl = setDownloadLink(videoLink, blob, videoFileName);
-                lastCsvBlobUrl = setDownloadLink(csvLink, csvBlob, names.csv);
 
-                // 自動保存（動画＋CSV）
-                // ※ iOS Safariの制約で、環境によっては自動DLが「ダウンロード一覧」止まりになります
-                try {
-                    autoDownload(blob, videoFileName);
-                } catch (e) {
-                    console.warn("auto video download failed", e);
-                }
-
-                try {
-                    autoDownload(csvBlob, names.csv);
-                } catch (e) {
-                    console.warn("auto csv download failed", e);
-                }
+                // 自動保存（動画）
+                try { autoDownload(blob, videoFileName); } catch (e) { console.warn("auto download failed", e); }
 
                 setStatus(
                     `完了\n` +
                     `動画: ${videoFileName}\n` +
-                    `CSV: ${names.csv}\n` +
                     `mime: ${actualMime || "(unknown)"}\n` +
                     `（再ダウンロードリンクも作成済み）`
                 );
 
-                //録画blobビュー再表示
-                playback.classList.remove("hidden");
-
-                //画面スリープを再開
-                await releaseWakeLock();
-
-
                 btnRec.disabled = false;
                 btnCam.disabled = false;
+                await releaseWakeLock();
             };
 
             recorder.start();
 
-            // 録画時間は「カウントダウン」ではなく、固定で20秒のままにする想定（必要ならUI追加で変更可）
-            const RECORD_SECONDS = 20;
             setTimeout(() => {
                 if (recorder && recorder.state !== "inactive") recorder.stop();
             }, RECORD_SECONDS * 1000);
